@@ -89,7 +89,7 @@ with open('wifi_networks.csv', mode='a', newline='') as file:
 
             # Print message indicating the script is actively running and receiving data.
             print(f"Data received at {timestamp}, refreshing every 10 seconds...")
-            print("Close program: Ctrl + c")
+            print("Close by pressing Ctrl + c")
 
             # Sleep for 10 seconds before refreshing.
             time.sleep(10)

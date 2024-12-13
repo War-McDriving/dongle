@@ -5,12 +5,15 @@ import time
 import signal
 import sys
 
+# Global dictionary to track logged SSIDs and their GPS locations
+logged_ssids = {}
+
 # Function to connect to GPS and get location data
 def get_gps_location():
     try:
         gpsd.connect()  # Connect to the gpsd daemon
         packet = gpsd.get_current()
-        
+
         if packet.mode >= 2:  # Ensure we have at least a 2D fix
             latitude = packet.lat
             longitude = packet.lon
@@ -60,7 +63,7 @@ def kill_conflicting_processes():
         print(f"Error killing conflicting processes: {e}")
 
 # Function to capture Wi-Fi data with airodump-ng and save to CSV
-def capture_wifi_data(interface, csv_filename):
+def capture_wifi_data(interface):
     try:
         # Run airodump-ng and capture output for 10 seconds
         print(f"Running airodump-ng on {interface}mon...")
@@ -75,24 +78,28 @@ def capture_wifi_data(interface, csv_filename):
         return None
 
 # Function to process the CSV and add GPS data
-def process_wifi_data(csv_filename):
+def process_wifi_data(csv_filename, latitude, longitude, altitude):
     try:
         # Read the generated CSV file and append to the final output CSV
         with open('/tmp/airodump-01.csv', 'r') as infile, open(csv_filename, 'a', newline='') as outfile:
             reader = csv.reader(infile)
             writer = csv.writer(outfile)
 
-            latitude, longitude, altitude = get_gps_location()
-            print(f"GPS Location: Lat={latitude}, Lon={longitude}, Alt={altitude}")
-
-            # Write rows with Wi-Fi and GPS data
             for row in reader:
-                if len(row) > 13 and row[0].strip():  # Check if row contains Wi-Fi data
-                    ssid = row[13]
-                    mac = row[0]
-                    channel = row[3]
-                    signal = row[8]
-                    writer.writerow([ssid, mac, channel, signal, latitude, longitude, altitude])
+                if len(row) > 13 and row[0].strip():  # Ensure the row contains valid Wi-Fi data
+                    ssid = row[13].strip()
+                    mac = row[0].strip()
+                    channel = row[3].strip()
+                    signal = row[8].strip()
+
+                    # Avoid duplicate entries or mismatched data
+                    if ssid not in logged_ssids:
+                        logged_ssids[ssid] = (latitude, longitude, altitude)
+                        writer.writerow([ssid, mac, channel, signal, latitude, longitude, altitude])
+                    else:
+                        # Check for location inconsistency
+                        if logged_ssids[ssid] != (latitude, longitude, altitude):
+                            print(f"Warning: SSID {ssid} seen at different locations!")
     except Exception as e:
         print(f"Error processing Wi-Fi data: {e}")
 
@@ -105,12 +112,12 @@ def signal_handler(sig, frame):
 def main():
     # Register the signal handler for graceful exit
     signal.signal(signal.SIGINT, signal_handler)
-    
+
     print("Fetching GPS location...")
     latitude, longitude, altitude = get_gps_location()
     if latitude is None:
         print("No GPS fix available. Proceeding with Wi-Fi scan only.")
-    
+
     print("Scanning for wireless interfaces...")
     interfaces = get_wireless_interfaces()
 
@@ -125,19 +132,20 @@ def main():
         try:
             enable_monitor_mode(iface)
             csv_filename = f'WiFi_scan_{iface}.csv'
-            
+
             # Create or overwrite the CSV file and add header
             with open(csv_filename, 'w', newline='') as outfile:
                 writer = csv.writer(outfile)
                 writer.writerow(['SSID', 'MAC', 'Channel', 'Signal', 'Latitude', 'Longitude', 'Altitude'])
-            
+
             # Continuous Wi-Fi capture and data processing loop
             while True:
-                process = capture_wifi_data(iface, csv_filename)
+                process = capture_wifi_data(iface)
                 if process:
                     time.sleep(10)  # Wait for 10 seconds before processing the data again
                     process.terminate()  # Terminate the airodump-ng process
-                    process_wifi_data(csv_filename)  # Process the data and save it to CSV
+                    latitude, longitude, altitude = get_gps_location()
+                    process_wifi_data(csv_filename, latitude, longitude, altitude)  # Process the data and save it to CSV
                 else:
                     break
 
